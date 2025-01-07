@@ -1,0 +1,99 @@
+name: Build and Package xAI++ Library
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ninja-build libssl-dev libbz2-dev libicu-dev python3-dev clang
+
+    - name: Cache Boost
+      id: cache-boost
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/boost_install
+        key: boost-1.87.0-${{ runner.os }}
+
+    - name: Install Boost
+      if: steps.cache-boost.outputs.cache-hit != 'true'
+      run: |
+        wget https://github.com/boostorg/boost/releases/download/boost-1.87.0/boost-1.87.0-b2-nodocs.tar.gz
+        tar -xzf boost-1.87.0-b2-nodocs.tar.gz
+        cd boost-1.87.0
+        ./bootstrap.sh --with-toolset=clang --prefix=${{ github.workspace }}/boost_install
+        ./b2 -j$(nproc) toolset=clang cxxstd=20 link=shared threading=multi variant=release --with-system --with-thread --with-json
+        ./b2 install
+
+    - name: Configure CMake
+      run: |
+        mkdir build
+        cd build
+        cmake .. -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../install -DCMAKE_PREFIX_PATH=${{ github.workspace }}/boost_install
+
+    - name: Build static library
+      run: |
+        cd build
+        cmake --build . --target xai
+
+    - name: Install to staging directory
+      run: |
+        cd build
+        cmake --install . --prefix ../install
+
+    - name: Prepare package
+      run: |
+        mkdir -p package
+        cp install/lib/libxai.a package/
+        cp install/include/xai.hpp package/
+
+    - name: Create ZIP package
+      run: |
+        cd package
+        zip -r xai-library.zip .
+
+    - name: Upload ZIP artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: xai-library
+        path: package/xai-library.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/master'
+    steps:
+    - name: Download ZIP artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: xai-library
+
+    - name: Generate unique tag
+      id: tag
+      run: |
+        echo "TAG_NAME=release-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_ENV
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ env.TAG_NAME }}
+        name: "Latest build from master"
+        body: "Automated release from master branch"
+        files: xai-library.zip
+        draft: false
+        prerelease: false
