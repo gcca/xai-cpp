@@ -1,5 +1,7 @@
 #include "xai.hpp"
 
+#include <iostream>
+
 #include <boost/asio/ssl.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
@@ -227,9 +229,15 @@ public:
 
           std::string payload = data.substr(pos, end - pos);
 
-          boost::json::value value = boost::json::parse(payload);
-
-          call(std::make_unique<xAIDeltaChoices>(std::move(value.as_object())));
+          try {
+            boost::json::value value = boost::json::parse(payload);
+            call(std::make_unique<xAIDeltaChoices>(
+                std::move(value.as_object())));
+          } catch (const std::exception &e) {
+            std::cerr << "Error ChatCompletion(parse): " << e.what() << "\n["
+                      << payload << ']' << std::endl;
+            std::exit(1);
+          }
         }
       } catch (const boost::beast::system_error &e) {
         if (e.code() == boost::asio::error::eof) {
